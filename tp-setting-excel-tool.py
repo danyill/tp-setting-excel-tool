@@ -29,7 +29,7 @@ TODO:
  - so many things
  - sorting options on display and dump output?    
  - sort out guessing of Transpower standard design version 
- - sort out dumping all parameters
+ - sort out dumping all parameters and argparse dependencies
  - sort out extraction of DNP data
 """
 
@@ -37,7 +37,7 @@ __author__ = "Daniel Mulholland"
 __copyright__ = "Copyright 2015, Daniel Mulholland"
 __credits__ = ["Kenneth Reitz https://github.com/kennethreitz/tablib"]
 __license__ = "GPL"
-__version__ = '0.01'
+__version__ = '0.02'
 __maintainer__ = "Daniel Mulholland"
 __hosted__ = "https://github.com/danyill/tp-setting-excel-tool/"
 __email__ = "dan.mulholland@gmail.com"
@@ -49,12 +49,10 @@ import sys
 import os
 import argparse
 import glob
-# should move to regex in Python 3 for compatibility
 import regex
 import tablib
 import xlrd
-import xlwt
-import openpyxl
+import string
 
 BASE_PATH = os.path.dirname(os.path.realpath(__file__))
 OUTPUT_FILE_NAME = "output"
@@ -74,30 +72,30 @@ PARAMETER_SEPARATOR = ':'
 
 SEL_SEARCH_EXPR = {\
     'G1': [['Group 1\r\nGroup Settings:', 'SELogic group 1\r\n'], \
-           ['$', '=>', 'Group [23456]\r\nGroup Settings:', 'SELogic group [23456]\r\n'] \
+           ['=\>', 'Group [23456]\r\nGroup Settings:', 'SELogic group [23456]\r\n'] \
           ], \
     'G2': [['Group 2\r\nGroup Settings:', 'SELogic group 2\r\n'], \
-           ['$', '=>', 'Group [13456]\r\nGroup Settings:', 'SELogic group [13456]\r\n'] \
+           ['=\>', 'Group [13456]\r\nGroup Settings:', 'SELogic group [13456]\r\n'] \
           ], \
     'G3': [['Group 3\r\nGroup Settings:', 'SELogic group 3\r\n'], \
-           ['$', '=>', 'Group [12456]\r\nGroup Settings:', 'SELogic group [12456]\r\n'] \
+           ['=\>', 'Group [12456]\r\nGroup Settings:', 'SELogic group [12456]\r\n'] \
           ], \
     'G4': [['Group 4\r\nGroup Settings:', 'SELogic group 4\r\n'], \
-           ['$', '=>', 'Group [12356]\r\nGroup Settings:', 'SELogic group [12356]\r\n'] \
+           ['=\>', 'Group [12356]\r\nGroup Settings:', 'SELogic group [12356]\r\n'] \
           ],\
     'G5': [['Group 5\r\nGroup Settings:', 'SELogic group 5\r\n'], \
-           ['$', '=>', 'Group [12346]\r\nGroup Settings:', 'SELogic group [12346]\r\n'] \
+           ['=\>', 'Group [12346]\r\nGroup Settings:', 'SELogic group [12346]\r\n'] \
           ], \
     'G6': [['Group 6\r\nGroup Settings:', 'SELogic group 6\r\n'], \
-           ['$', '=>', 'Group [12345]\r\nGroup Settings:', 'SELogic group [12345]\r\n'] \
+           ['=\>', 'Group [12345]\r\nGroup Settings:', 'SELogic group [12345]\r\n'] \
           ], \
-    'P1': [['Port 1\r\n'], ['$', '=>', 'Port [2345F]\r\n']], \
-    'P2': [['Port 2\r\n'],['$', '=>', 'Port [2345F]\r\n']], \
-    'P3': [['Port 3\r\n'],['$', '=>', 'Port [2345F]\r\n']], \
-    'PF': [['Port F\r\n'],['$', '=>', 'Port [2345F]\r\n']], \
+    'P1': [['Port 1\r\n'], ['$', '=\>', 'Port [2345F]\r\n']], \
+    'P2': [['Port 2\r\n'],['$', '=\>', 'Port [2345F]\r\n']], \
+    'P3': [['Port 3\r\n'],['$', '=\>', 'Port [2345F]\r\n']], \
+    'PF': [['Port F\r\n'],['$', '=\>', 'Port [2345F]\r\n']], \
     }
 
-OUTPUT_HEADERS = ['File','Group','Setting Name','Val']
+OUTPUT_HEADERS = ['File','Setting Name','Val']
 
 
 def main(arg=None):
@@ -234,7 +232,7 @@ def extract_parameters(filename, settings, reference_data):
 
     # read data
     with open(filename,'r') as f:
-        data = f.read()
+        read_data = f.read()
 
     """
     How this regex works:
@@ -268,63 +266,78 @@ def extract_parameters(filename, settings, reference_data):
     TODO: This is how the --all or -a parameter should be implemented
     results = regex.findall('(\r\n| |^)([A-Z0-9 _]{6})=(?>([\w :+/\\()!,.\-_\\*]+)([ ]{0}[A-Z0-9 _]{6}=|\r\n))', 
         data, flags=regex.MULTILINE, overlapped=True)
+    
+    Just need to break down the groups. Trivial. Execise for the reader.
+    :-)
     """
     
-    print settings
     for parameter in settings:
-        # parameter is e.g. G1:50P1P
+        data = read_data
+        # parameter is e.g. G1:50P1P and there is a separator
+        # if parameter.find(PARAMETER_SEPARATOR) != -1:
         if parameter.find(PARAMETER_SEPARATOR) != -1:
             grouper = parameter.split(PARAMETER_SEPARATOR)[0]
             setting = parameter.split(PARAMETER_SEPARATOR)[1]
             
-            print SEL_SEARCH_EXPR.keys()
-            if SEL_SEARCH_EXPR[grouper] == None:
-                print 'Searching the whole file without bounds'
-                pass
+        if parameter.find(PARAMETER_SEPARATOR) == -1 or \
+            SEL_SEARCH_EXPR[grouper] == None:
+            # print 'Searching the whole file without bounds'
+            if parameter in ['FID', 'PARTNO', 'DEVID']:
+                result = get_special_parameter(parameter,data)        
             else:
-                start_regex = '('
-                for k in SEL_SEARCH_EXPR[grouper][0]:
-                    start_regex += k + '|'
-                start_regex += ')'
-                
-                end_regex = '('
-                for k in SEL_SEARCH_EXPR[grouper][1]:
-                    end_regex += k + '|'
-                end_regex += ')'
-                
-                print start_regex
-                print end_regex
-                
-                data2 = regex.find_all(start_regex+ ".*"+end_regex, data, flags = regex.MULTILINE)
-                print grouper
-                print setting
-                print data2
-            
-            
-            
-    sys.exit()
-                
-    # start_regex = 
-    # inner_regex = ljust(setting, 6, ' ')
-    # end_regex = 
-    
-    results = regex.findall('(\r\n| |^)([A-Z0-9 _]{6})=(?>([\w :+/\\()!,.\-_\\*]+)([ ]{0}[A-Z0-9 _]{6}=|\r\n))', 
-        data, flags=regex.MULTILINE, overlapped=True)
-    
-    #for m in matches:
-    #    print m[1].strip() + '=' + m[2].strip()
-    result = get_special_parameter('FID',data)
-    print result
-    result = get_special_parameter('PARTNO',data)
-    print result
-    result = get_special_parameter('DEVID',data)
-    print result
-    
-    if result <> None:
-        filename = os.path.basename(filename)
-        parameter_info.append([filename, m[1].strip(), m2.strip()])
+                result = find_SEL_text_parameter(setting, [data])
+        
+        else:
+            # now search inside this data group for the desired setting
+            data = find_between_text( \
+                start_options = SEL_SEARCH_EXPR[grouper][0], \
+                end_options = SEL_SEARCH_EXPR[grouper][1],  
+                text = data) 
+        
+            if data:
+                result = find_SEL_text_parameter(setting, data)
+
+        if result <> None:
+            filename = os.path.basename(filename)
+            parameter_info.append([filename, parameter, result])
             
     return parameter_info
+
+def find_SEL_text_parameter(setting, data_array):
+    
+    for r in data_array:
+        # Example for TR setting: 
+        #  - (\r\n| |^)(TR    )=(?>([\w :+/\\()!,.\-_\\*]+)([ ]{0}[A-Z0-9 _]{6}=|\r\n))
+        found_parameter = regex.findall('(\r\n| |^)(' + \
+                string.ljust(setting, 6, ' ') + \
+                ')=(?>([\w :+/\\()!,.\-_\\*]+)([ ]{0}[A-Z0-9 _]{6}=|\r\n))', \
+                r, flags=regex.MULTILINE, overlapped=True)
+         
+        if found_parameter:
+            return found_parameter[0][2]
+        
+def find_between_text(start_options, end_options, text):
+    # return matches between arbitrary start and end options
+    # with matches across lines
+    results = []
+    start_regex = ''
+    for k in start_options:
+        start_regex = k 
+        
+        # create ending regex expression
+        end_regex = '('                    
+        for k in end_options:
+            end_regex += k + '|'
+        end_regex = end_regex[0:-1]                    
+        end_regex += ')'
+        
+        result = regex.findall(start_regex + '((.|\n)+?)' + end_regex, text, flags = regex.MULTILINE)
+        
+        if result:
+            # print result[0][0]
+            results.append(result[0][0])
+        
+    return results
 
 def get_special_parameter(name,data):
     # Something like:
@@ -359,7 +372,15 @@ def display_info(parameter_info):
         for index,element in enumerate(line):
             display_line += element.ljust(lengths[index]+2,' ')
         print display_line
-
+        
+if __name__ == '__main__': 
+    if len(sys.argv) == 1 :
+        main(r'--all -o csv in G1:TID FID G1:TR G1:81D1P G1:81D1D G1:81D2P G1:81D2P G1:E81')           
+    else:
+        main()
+    os.system("Pause")
+        
+"""
 def test_xls():
 
     sys.stdout = open('log', 'w')
@@ -399,16 +420,4 @@ def test_xls():
             cell_type = worksheet.cell_type(curr_row, curr_cell)
             cell_value = worksheet.cell_value(curr_row, curr_cell)
             print '	', cell_type, ':', cell_value
-        
-if __name__ == '__main__': 
-    if len(sys.argv) == 1 :
-        main(r'--all -o xlsx in G1:TR')
-        print 'hi'
-        
-        # test_xls()
-        
-        
-    else:
-        main()
-    os.system("Pause")
-        
+"""
