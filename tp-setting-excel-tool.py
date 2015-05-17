@@ -15,29 +15,26 @@ This tool can be run from the IDLE prompt using the main def.
 Thoughtful ideas most welcome. 
 
 Installation instructions (for Python *2.7.9*):
- - pip install openpyxl
  - pip install xlrd
- - pip install xlwt
  - pip install tablib
 
  - or if behind a proxy server: pip install --proxy="user:password@server:port" packagename
  - within Transpower: pip install --proxy="transpower\mulhollandd:password@tptpxy001.transpower.co.nz:8080" tablib    
- 
- C:\Python27\Scripts\pip install --proxy="transpower\mulhollandd:nottelling@tptpxy001.transpower.co.nz:8080" xlrd
  
 TODO: 
  - so many things
  - sorting options on display and dump output?    
  - sort out guessing of Transpower standard design version 
  - sort out dumping all parameters and argparse dependencies
- - sort out extraction of DNP data
+ - sort out extraction of DNP data and port settings
+ - pivoting settings
 """
 
 __author__ = "Daniel Mulholland"
 __copyright__ = "Copyright 2015, Daniel Mulholland"
 __credits__ = ["Kenneth Reitz https://github.com/kennethreitz/tablib"]
 __license__ = "GPL"
-__version__ = '0.02'
+__version__ = '0.03'
 __maintainer__ = "Daniel Mulholland"
 __hosted__ = "https://github.com/danyill/tp-setting-excel-tool/"
 __email__ = "dan.mulholland@gmail.com"
@@ -47,61 +44,64 @@ __email__ = "dan.mulholland@gmail.com"
 
 import sys
 import os
+import string
 import argparse
 import glob
 import regex
 import tablib
 import xlrd
-import string
+
+# for password protected xls a different 
+# strategy is required we need to have
+# excel installed to decrypt the workbook
+# import win32com.client
 
 BASE_PATH = os.path.dirname(os.path.realpath(__file__))
 OUTPUT_FILE_NAME = "output"
 OUTPUT_HEADERS = ['Filename','Setting Name','Val','Spreadsheet Reference']
 EXCEL_FILE_REGEX = '(xls|xlsx|xlsm)$'
-TXT_EXTENSION = 'TXT'
-SEL_EXPRESSION = r'[\w :+/\\()!,.\-_\\*]*'
-SEL_SETTING_EOL = r'\x1c\r\n'
-SEL_SETTING_NAME = r'[\w _]*'
-SEL_FID_EXPRESSION='^FID=([\w :+/\\()!,.\-_\\*]*)\r\n'
-
-SEL_EXPRESSION_RETURN = r'[\w :+/\\()!,.\-_\\*]'
-SEL_SETTING_NAME_RETURN = r'([A-Z0-9 _]{6})='
-SEL_FID_EXPRESSION='^FID=([\w :+/\\()!,.\-_\\*]*)\r\n'
 
 PARAMETER_SEPARATOR = ':'
 
 SEL_SEARCH_EXPR = {\
-    'G1': [['Group 1\r\nGroup Settings:', 'SELogic group 1\r\n'], \
-           ['=\>', 'Group [23456]\r\nGroup Settings:', 'SELogic group [23456]\r\n'] \
+    'G1': [['SEL321 DISTANCE RELAY GROUP 1 SETTINGS',
+            'RELAY GROUP 1 SETTINGS (SET 1)',
+            'GROUP 1 SETTINGS'], \
+           ['SEL321 DISTANCE RELAY GROUP 2 SETTINGS',
+           'GROUP 2 IS SET IDENTICAL TO GROUP 1',
+           'RELAY GROUP 2 SETTINGS (SET 2)',
+           'GROUP 6 SETTINGS'] \
           ], \
-    'G2': [['Group 2\r\nGroup Settings:', 'SELogic group 2\r\n'], \
-           ['=\>', 'Group [13456]\r\nGroup Settings:', 'SELogic group [13456]\r\n'] \
+    'G2': [['SEL321 DISTANCE RELAY GROUP 2 SETTINGS',
+            'RELAY GROUP 2 SETTINGS (SET 2)'], \
+           ['SEL321 DISTANCE RELAY GROUP 6 SETTINGS',
+            'GROUP 6 IS SET IDENTICAL TO GROUP 1'
+            'RELAY GROUP 6 SETTINGS (SET 6)'] \
           ], \
-    'G3': [['Group 3\r\nGroup Settings:', 'SELogic group 3\r\n'], \
-           ['=\>', 'Group [12456]\r\nGroup Settings:', 'SELogic group [12456]\r\n'] \
+    'G6': [['SEL321 DISTANCE RELAY GROUP 6 SETTINGS',
+            'RELAY GROUP 6 SETTINGS (SET 6)'], \
+           ['Settings Valid Until:',
+            'GROUP 6 SETTINGS'] \
           ], \
-    'G4': [['Group 4\r\nGroup Settings:', 'SELogic group 4\r\n'], \
-           ['=\>', 'Group [12356]\r\nGroup Settings:', 'SELogic group [12356]\r\n'] \
-          ],\
-    'G5': [['Group 5\r\nGroup Settings:', 'SELogic group 5\r\n'], \
-           ['=\>', 'Group [12346]\r\nGroup Settings:', 'SELogic group [12346]\r\n'] \
-          ], \
-    'G6': [['Group 6\r\nGroup Settings:', 'SELogic group 6\r\n'], \
-           ['=\>', 'Group [12345]\r\nGroup Settings:', 'SELogic group [12345]\r\n'] \
-          ], \
-    'P1': [['Port 1\r\n'], ['$', '=\>', 'Port [2345F]\r\n']], \
-    'P2': [['Port 2\r\n'],['$', '=\>', 'Port [2345F]\r\n']], \
-    'P3': [['Port 3\r\n'],['$', '=\>', 'Port [2345F]\r\n']], \
-    'PF': [['Port F\r\n'],['$', '=\>', 'Port [2345F]\r\n']], \
     }
 
+# Structure of Transpower setting spreadsheets differs
+# between the SEL-321, SEL-311C, SEL-351S and SEL-387
+SETTINGS_PRINTOUT_SHEETS=['Main_Settings_Printout', 'Settings_Printout', 
+    'Summary']
+RELAY_TYPE_SHEETS = ['Common_Info_And_Settings', 'Global_Settings', 
+   'Global_Setting','General Data']
+REVISION_SHEETS = ['Revision Log', 'Revision', 'Revision_Log', 'Revisions']
 OUTPUT_HEADERS = ['File','Setting Name','Val']
-
+EXCEL_EXTENSION = 'XLS'
 
 def main(arg=None):
     parser = argparse.ArgumentParser(
-        description='Process individual or multiple RDB files and produce summary'\
-            ' of results as a csv or xls file.',
+        description='Process individual or multiple Transpower SEL setting' \
+            'spreadsheet files and produce summary of results as a csv or' \
+            ' xls file.'\
+            ' '\
+            ' NOTE: Only processes .xls files. Not .xlsx or .xlsm!',
         epilog='Enjoy. Bug reports and feature requests welcome. Feel free to build a GUI :-)',
         prefix_chars='-/')
 
@@ -110,24 +110,26 @@ def main(arg=None):
                         ' a Micro$oft Excel .xls spreadsheet. If no output provided then'\
                         ' output is to the screen.')
 
-    parser.add_argument('path', metavar='PATH|FILE', nargs=1, 
+    parser.add_argument('path', metavar='PATH|FILE', nargs='+', 
                        help='Go recursively go through path PATH. Redundant if FILE'\
-                       ' with extension .rdb is used. When recursively called, only'\
-                       ' searches for files with:' +  TXT_EXTENSION + '. Globbing is'\
+                       ' with extension ' + EXCEL_EXTENSION + ' is used. When '\
+                       ' recursively called, only'\
+                       ' searches for files with:' +  EXCEL_EXTENSION + '. Globbing is'\
                        ' allowed with the * and ? characters.')
 
-    parser.add_argument('-s', '--screen', action="store_true",
-                       help='Show output to screen')
+    parser.add_argument('-c', '--console', action="store_true",
+                       help='Show output to console')
 
-    parser.add_argument('-a', '--all', action="store_true",
-                       help='Output all settings!')                       
+    # Not implemented yet
+    # parser.add_argument('-a', '--all', action="store_true",
+    #                   help='Output all settings!')                       
                        
     # Not implemented yet
-    #parser.add_argument('-d', '--design', action="store_true",
+    # parser.add_argument('-d', '--design', action="store_true",
     #                   help='Attempt to determine Transpower standard design version and' \
     #                   ' include this information in output')
                        
-    parser.add_argument('settings', metavar='G:S', type=str, nargs='+',
+    parser.add_argument('-s', '--settings', metavar='G:S', type=str, nargs='+',
                        help='Settings in the form of G:S where G is the group'\
                        ' and S is the SEL variable name. If G: is omitted the search' \
                        ' goes through all groups. Otherwise G should be the '\
@@ -135,11 +137,12 @@ def main(arg=None):
                        ' e.g. OUT201.' \
                        ' Examples: G1:50P1P or G2:50P1P or 50P1P' \
                        ' '\
-                       ' You can also get port settings using P:S'
+                       ' For the SEL-387 no grouping parameter is required'\
+                       ' '\
                        ' Note: Applying a group for a non-grouped setting is unnecessary'\
                        ' and will prevent you from receiving results.'\
                        ' Special parameters are the following self-explanatory items:'\
-                       ' FID, PARTNO, DEVID')
+                       ' REVISION')
 
     parser.add_argument('-v', '--version', action='version', version='%(prog)s ' + __version__)
 
@@ -149,16 +152,16 @@ def main(arg=None):
         args = parser.parse_args(arg.split())
     
     # read in list of files
-    files_to_do = return_file_paths(args.path, TXT_EXTENSION)
-    
+    files_to_do = return_file_paths([' '.join(args.path)], EXCEL_EXTENSION)
+
     # sort out the reference data for knowing where to search in the text string
     lookup = SEL_SEARCH_EXPR
     if files_to_do != []:
-        process_txt_files(files_to_do, args, lookup)
+        process_xls_files(files_to_do, args, lookup)
     else:
         print('Found nothing to do for path: ' + args.path[0])
         sys.exit()
-        os.system("Pause")
+        raw_input("Press any key to exit...")
     
 def return_file_paths(args_path, file_extension):
     paths_to_work_on = []
@@ -168,7 +171,6 @@ def return_file_paths(args_path, file_extension):
             paths_to_work_on +=  glob.glob(os.path.join(BASE_PATH,p))
         else:
             paths_to_work_on += glob.glob(p)
-            
     files_to_do = []
     # make a list of files to iterate over
     if paths_to_work_on != None:
@@ -194,7 +196,7 @@ def walkabout(p_or_f, file_extension):
                 return_files.append(os.path.join(root,name))
     return return_files
     
-def process_txt_files(files_to_do, args, reference_data):
+def process_xls_files(files_to_do, args, reference_data):
     parameter_info = []
         
     for filename in files_to_do:      
@@ -224,137 +226,100 @@ def process_txt_files(files_to_do, args, reference_data):
         with open(name + '.xlsx','wb') as output:
             output.write(data.xlsx)
 
-    if args.screen == True:
+    if args.console == True:
         display_info(parameter_info)
+
+def in_both_lists(a, b):
+    return [i for i in a if i in b]
+
+def get_relay_type(workbook):
+    worksheets = workbook.sheet_names()
+    rtypes = in_both_lists(worksheets, RELAY_TYPE_SHEETS)
+    return workbook.sheet_by_name(rtypes[0]).cell(0,0).value.split(' ')[0]
+    
+def find_between_rows(parameter, worksheet):
+    grouper = None
+    sp = None
+    in_band = None
+    
+    if parameter.find(PARAMETER_SEPARATOR) != -1:
+        grouper = parameter.split(PARAMETER_SEPARATOR)[0]
+        sp = parameter.split(PARAMETER_SEPARATOR)[1]
+        in_band = False
+    else:
+        sp = parameter
+        in_band = True
+
+    num_rows = worksheet.nrows - 1
+    curr_row = -1
+    while curr_row < num_rows:
+        curr_row += 1
+        row = worksheet.row(curr_row)
+        for idx, r in enumerate(row):
+            if grouper != None and r.value in SEL_SEARCH_EXPR[grouper][0]:
+                in_band = True
+            elif grouper != None and r.value in SEL_SEARCH_EXPR[grouper][1]:
+                in_band = False
+            
+            if (sp + '=' == r.value) and in_band == True:
+                return row[idx+1].value                
+            elif (sp == r.value and row[idx+1].value == '=' and
+                in_band == True):
+                return row[idx+2].value
+    return None
 
 def extract_parameters(filename, settings, reference_data):
     parameter_info=[]
 
     # read data
-    with open(filename,'r') as f:
-        read_data = f.read()
-
-    """
-    How this regex works:
-     * (\r\n| |^)
-       - Looks for either a new line CR/LF  or a space or the start of the file.
-       - This is always true in process terminal views.
-     
-     * ([A-Z0-9 _]{6})
-       - SEL setting names are typically uppercase without spaces comprising 
-         characters A-Z 0-9 and sometimes with underscores (exception, DNP)
-     
-     * =
-       - Then followed by an equals character
-     
-     * (?>([\w :+/\\()!,.\-_\\*]+)
-       - There's quite a few options for what can be in a SEL expression
-       - This probably doesn't take them all into account add to suit 
-       - This is an atomic group expression which is a solution for making 
-         sure the delimiter doesn't get "eaten" because the delimiter is 
-         comprised of the same characters as the expression.
-         
-       - This is well described here: http://www.rexegg.com/regex-quantifiers.html
-     
-     * ([ ]{0}[A-Z0-9 _]{6}=|\r\n
-       - Then the delimiter comes. This is the next SEL setting name, if there
-         are multiple columns. Alternatively the delimiter is a newline CR/LF
-         combination.
-    """
-
-    """
-    TODO: This is how the --all or -a parameter should be implemented
-    results = regex.findall('(\r\n| |^)([A-Z0-9 _]{6})=(?>([\w :+/\\()!,.\-_\\*]+)([ ]{0}[A-Z0-9 _]{6}=|\r\n))', 
-        data, flags=regex.MULTILINE, overlapped=True)
-    
-    Just need to break down the groups. Trivial. Execise for the reader.
-    :-)
-    """
-    
-    for parameter in settings:
-        data = read_data
-        # parameter is e.g. G1:50P1P and there is a separator
-        # if parameter.find(PARAMETER_SEPARATOR) != -1:
-        if parameter.find(PARAMETER_SEPARATOR) != -1:
-            grouper = parameter.split(PARAMETER_SEPARATOR)[0]
-            setting = parameter.split(PARAMETER_SEPARATOR)[1]
-            
-        if parameter.find(PARAMETER_SEPARATOR) == -1 or \
-            SEL_SEARCH_EXPR[grouper] == None:
-            # print 'Searching the whole file without bounds'
-            if parameter in ['FID', 'PARTNO', 'DEVID']:
-                result = get_special_parameter(parameter,data)        
-            else:
-                result = find_SEL_text_parameter(setting, [data])
+    try:
+        workbook = xlrd.open_workbook(filename)
+    except xlrd.XLRDError:
+        print 'Could not read spreadsheet: ' + filename + '. Possibly encrypted?'
+        parameter_info.append([filename, 'FAIL', 'Could not read spreadsheet. Possibly encrypted.'])
+        return parameter_info
+    except:
+        print 'Could not read spreadsheet: ' + filename + '. Possibly damaged?'
+        parameter_info.append([filename, 'FAIL', 'Could not read spreadsheet. Possibly damaged.'])
+        return parameter_info
         
+    try:
+        #need to add code for handling encrypted workbooks
+        #either need to port e.g. the libreoffice code or do a win32com application 
+        #excel = win32com.client.Dispatch('Excel.Application')
+        #workbook = excel.Workbooks.open(r'c:\mybook.xls', 'password')
+        #workbook.SaveAs('unencrypted.xls')
+        #http://stackoverflow.com/questions/22789951/xlrd-error-workbook-is-encrypted-python-3-2-3
+
+        # check to see that we have the following:
+        # - a sheet with a revision log
+        # - a main sheet from which we'll extract the relay type
+        # - a settings printout/summary sheet from which we'll extract settings
+        worksheets = workbook.sheet_names()
+        revision_sheet = in_both_lists(worksheets, REVISION_SHEETS)
+        setting_sheet = in_both_lists(worksheets, SETTINGS_PRINTOUT_SHEETS)
+        rtype_sheet = in_both_lists(worksheets, RELAY_TYPE_SHEETS)
+        
+        fn = os.path.basename(filename)
+        
+        if revision_sheet and setting_sheet and rtype_sheet:
+            parameter_info.append([fn, 'Relay', get_relay_type(workbook)])
+
+            settings_sheet = workbook.sheet_by_name(setting_sheet[0])
+            for parameter in settings:            
+                result = find_between_rows(parameter,settings_sheet)
+                if result <> None:
+                    parameter_info.append([fn, parameter, result])
+                else:
+                    parameter_info.append([fn, parameter, 'Not Found'])
         else:
-            # now search inside this data group for the desired setting
-            data = find_between_text( \
-                start_options = SEL_SEARCH_EXPR[grouper][0], \
-                end_options = SEL_SEARCH_EXPR[grouper][1],  
-                text = data) 
+            print 'Not a valid setting spreadsheet:' + filename
         
-            if data:
-                result = find_SEL_text_parameter(setting, data)
-
-        if result <> None:
-            filename = os.path.basename(filename)
-            parameter_info.append([filename, parameter, result])
-            
+    except:
+        print 'Well that was a fail'
+        parameter_info.append([filename, 'FAIL', 'Could not read spreadsheet.'])
     return parameter_info
-
-def find_SEL_text_parameter(setting, data_array):
     
-    for r in data_array:
-        # Example for TR setting: 
-        #  - (\r\n| |^)(TR    )=(?>([\w :+/\\()!,.\-_\\*]+)([ ]{0}[A-Z0-9 _]{6}=|\r\n))
-        found_parameter = regex.findall('(\r\n| |^)(' + \
-                string.ljust(setting, 6, ' ') + \
-                ')=(?>([\w :+/\\()!,.\-_\\*]+)([ ]{0}[A-Z0-9 _]{6}=|\r\n))', \
-                r, flags=regex.MULTILINE, overlapped=True)
-         
-        if found_parameter:
-            return found_parameter[0][2]
-        
-def find_between_text(start_options, end_options, text):
-    # return matches between arbitrary start and end options
-    # with matches across lines
-    results = []
-    start_regex = ''
-    for k in start_options:
-        start_regex = k 
-        
-        # create ending regex expression
-        end_regex = '('                    
-        for k in end_options:
-            end_regex += k + '|'
-        end_regex = end_regex[0:-1]                    
-        end_regex += ')'
-        
-        result = regex.findall(start_regex + '((.|\n)+?)' + end_regex, text, flags = regex.MULTILINE)
-        
-        if result:
-            # print result[0][0]
-            results.append(result[0][0])
-        
-    return results
-
-def get_special_parameter(name,data):
-    # Something like:
-    # name=FID for "FID=SEL-351S-6-R107-V0-Z003003-D20011129","0958"
-    # name=PARTNO for "PARTNO=0351S61H3351321","05AE"
-    # name=DEVID for "DEVID=TMU 2782","0402"
-    return regex.findall(r'^\"' + name + r'=([\w :+/\\()!,.\-_\\*\"]*\r\n)', 
-        data, flags=regex.MULTILINE, overlapped=True)
-
-def get_dnp(name, data):
-    # Not implemented yet
-    # Analogs  = 0 2 4 8 10 12 31 35 106 
-    # Binaries = 295 677 678 223 216 224 1020 1021 1022 296 527 571 567 595 735  \
-    #       734 233 242 740 251 179 180 181 360 361 362 863 364 865 866 867  \
-    #       767 766 765 679 680 681 864 
-    pass
-
 def display_info(parameter_info):
     lengths = []
     # first pass to determine column widths:
@@ -372,52 +337,12 @@ def display_info(parameter_info):
         for index,element in enumerate(line):
             display_line += element.ljust(lengths[index]+2,' ')
         print display_line
-        
+
 if __name__ == '__main__': 
     if len(sys.argv) == 1 :
-        main(r'--all -o csv in G1:TID FID G1:TR G1:81D1P G1:81D1D G1:81D2P G1:81D2P G1:E81')           
+        main(r'-o xlsx "/home/mulhollandd/Downloads/playing/" --settings TID RID G1:TR G1:81D1P G1:81D1D G1:81D2P G1:81D2P G1:E81')           
     else:
         main()
-    os.system("Pause")
+    raw_input("Press any key to exit...")
         
-"""
-def test_xls():
 
-    sys.stdout = open('log', 'w')
-    
-    my_file = return_file_paths(['in'], 'XLS')[0]
-    
-    workbook = xlrd.open_workbook(my_file)
-    print workbook.sheet_names()
-    # worksheet = workbook.sheet_by_name('Settings_Printout')
-    
-    worksheets = workbook.sheet_names()
-    for worksheet_name in worksheets:
-        worksheet = workbook.sheet_by_name(worksheet_name)
-        print worksheet.name
-    
-    workksheet = worksheets[0]
-    #worksheet = workbook.sheet_by_name('Group_1')
-    worksheet = workbook.sheet_by_name('Settings_Printout')
-    num_rows = worksheet.nrows - 1
-    curr_row = -1
-    while curr_row < num_rows:
-        curr_row += 1
-        row = worksheet.row(curr_row)
-        print row
-        
-    num_rows = worksheet.nrows - 1
-    num_cells = worksheet.ncols - 1
-    curr_row = -1
-    while curr_row < num_rows:
-        curr_row += 1
-        row = worksheet.row(curr_row)
-        print 'Row:', curr_row
-        curr_cell = -1
-        while curr_cell < num_cells:
-            curr_cell += 1
-            # Cell Types: 0=Empty, 1=Text, 2=Number, 3=Date, 4=Boolean, 5=Error, 6=Blank
-            cell_type = worksheet.cell_type(curr_row, curr_cell)
-            cell_value = worksheet.cell_value(curr_row, curr_cell)
-            print '	', cell_type, ':', cell_value
-"""
